@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Global Video Calling App - Matching & Room Mode</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f0f4f8; }
+    .card { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+    #localVideo { transform: scaleX(-1); }
+    .action-button { border:none; cursor:pointer; transition:all .3s ease; box-shadow:0 4px 6px rgba(0,0,0,0.1); position:relative; overflow:hidden;}
+    .action-button:hover { box-shadow:0 6px 10px rgba(0,0,0,0.2); transform:translateY(-2px);}
+  </style>
+
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app-check.js"; 
+
+    window.firebase = {
+      initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+      getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, query, orderBy, limit, getDocs, setLogLevel
+    };
+  </script>
+</head>
+
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+  <div id="main-app" class="w-full max-w-5xl bg-white p-6 md:p-10 rounded-2xl card space-y-8">
+    <h1 class="text-3xl font-extrabold text-gray-900 text-center border-b pb-4 text-indigo-700">
+      🌍 ग्लोबल वीडियो कॉल ऐप (Matching & Room Mode)
+    </h1>
+
+    <div class="flex flex-col md:flex-row justify-between items-center text-sm space-y-2 md:space-y-0 p-3 rounded-xl bg-gray-50 border border-gray-200">
+      <div id="auth-status" class="text-center text-gray-600 font-medium">Authentication...</div>
+      <div id="user-info" class="text-xs text-gray-500 hidden">
+        <p>आपकी ID: <span id="user-id" class="font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-semibold text-sm"></span></p>
+      </div>
+    </div>
+
+    <div class="text-center">
+      <button id="findPeopleBtn" class="action-button bg-pink-600 hover:bg-pink-700 text-white font-bold py-4 px-8 rounded-full transition duration-300 transform shadow-lg text-lg">
+        🚀 दुनिया भर से लोग ढूँढें (Global Match)
+      </button>
+    </div>
+
+    <div class="flex items-center my-4">
+      <div class="flex-grow border-t border-gray-300"></div>
+      <span class="flex-shrink mx-4 text-gray-500 font-semibold">या (OR)</span>
+      <div class="flex-grow border-t border-gray-300"></div>
+    </div>
+
+    <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
+      <input type="text" id="roomId" placeholder="Room ID डालें (जैसे: call123)" class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+      <button id="createBtn" class="action-button bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg">नया Room बनाएं</button>
+      <button id="joinBtn" class="action-button bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg">Room Join करें</button>
+    </div>
+
+    <div id="video-area" class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
+      <div class="relative bg-gray-900 rounded-xl overflow-hidden shadow-2xl aspect-video border-4 border-white">
+        <video id="localVideo" autoplay muted playsinline class="w-full h-full object-cover"></video>
+        <div class="absolute top-2 left-2 bg-indigo-600 text-white text-xs font-semibold px-3 py-1 rounded-full">आपका Video</div>
+      </div>
+      <div class="relative bg-gray-900 rounded-xl overflow-hidden shadow-2xl aspect-video border-4 border-white">
+        <video id="remoteVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+        <div class="absolute top-2 left-2 bg-pink-600 text-white text-xs font-semibold px-3 py-1 rounded-full">दूसरे का Video</div>
+      </div>
+    </div>
+
+    <div id="message-box" class="p-4 rounded-xl text-center font-bold bg-blue-100 text-blue-800">Status: Ready</div>
+
+    <div class="text-center">
+      <button id="hangupBtn" class="action-button bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-10 rounded-lg transition duration-200 opacity-50 cursor-not-allowed text-lg">
+        🛑 कॉल समाप्त करें
+      </button>
+    </div>
+  </div>
+
+  <!-- 🔥 Main JS Logic -->
+  <script type="module">
+    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+      getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, query, orderBy, limit, getDocs } = window.firebase;
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    let db, auth, userId = null;
+    let localStream, peerConnection, currentRoomId = null;
+    let isWaitingForMatch = false;
+    let offerCandidatesListener, answerCandidatesListener, roomListener, queueListener;
+
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const roomIdInput = document.getElementById('roomId');
+    const createBtn = document.getElementById('createBtn');
+    const joinBtn = document.getElementById('joinBtn');
+    const findPeopleBtn = document.getElementById('findPeopleBtn');
+    const hangupBtn = document.getElementById('hangupBtn');
+    const authStatus = document.getElementById('auth-status');
+    const userIdDisplay = document.getElementById('user-id');
+    const userInfoDiv = document.getElementById('user-info');
+    const messageBox = document.getElementById('message-box');
+
+    // ✅ Updated TURN + STUN Configuration
+    const iceServers = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ]
+    };
+
+    // बाकी पूरा कोड तुम्हारे जैसा ही रहेगा 👇
+    // (initializeFirebase, startLocalStream, setupPeerConnection,
+    // createOfferAndRoom, joinRoomAsAnswerer, findPeopleMatch, hangupCall etc.)
+    // मैंने सिर्फ iceServers block बदला है।
+  </script>
+</body>
+</html>
